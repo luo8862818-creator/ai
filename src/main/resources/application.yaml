@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: ai
+  config:
+    import: optional:file:./application-local.yaml
+
+server:
+  port: 8080
+
+dify:
+  base-url: ${DIFY_BASE_URL:http://192.168.3.5:18082/v1}
+  # 真实密钥填写在项目根目录 application-local.yaml，此处不保存真实密钥。
+  api-key: ${DIFY_API_KEY:}
+  # agent / agent-chat：Agent（流式调用，后端汇总）
+  # workflow：普通工作流；chatflow：对话工作流
+  # application-local.yaml 的同名配置会覆盖这里。
+  mode: ${DIFY_MODE:agent}
+  # 仅 workflow 模式需要填写真实节点变量，Agent 模式可保持为空。
+  input-variable: ${DIFY_INPUT_VARIABLE:}
+  output-variable: ${DIFY_OUTPUT_VARIABLE:}
+  connect-timeout: 10s
+  read-timeout: 180s
+  inputs: {}
+
+
+

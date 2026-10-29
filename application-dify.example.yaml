@@ -1,0 +1,14 @@
+# 配置示例：复制需要的模式到 application-local.yaml，重启应用生效。
+# 每个 Dify 应用有独立 API Key，切换模式时必须同时更换对应密钥。
+dify:
+  base-url: http://192.168.3.5:18082/v1
+  api-key: 请填写所选应用的API密钥
+  # agent：Agent；agent-chat：旧版 Agent；workflow：工作流；chatflow：对话工作流
+  mode: agent
+  connect-timeout: 10s
+  read-timeout: 180s
+  # 额外必填输入，按应用的参数定义填写。
+  inputs: {}
+  # 以下两项仅 workflow 必填，必须使用实际节点的变量名。
+  input-variable: ""
+  output-variable: ""
