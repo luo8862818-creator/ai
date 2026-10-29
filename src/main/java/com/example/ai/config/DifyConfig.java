@@ -16,6 +16,6 @@ public class DifyConfig {
     private String inputVariable = "";
     private String outputVariable = "";
     private Duration connectTimeout = Duration.ofSeconds(10);
-    private Duration readTimeout = Duration.ofSeconds(180);
+    private Duration readTimeout = Duration.ofSeconds(60);
     private Map<String, Object> inputs = new LinkedHashMap<>();
 }
