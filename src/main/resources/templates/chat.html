@@ -1,41 +1,71 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI 工作测试</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/css/chat.css?v=20261029-links-v3">
-  <script src="/js/chat.js?v=20261029-links-v3" defer></script>
-</head>
-<body>
-<main class="chat-window" aria-label="AI 工作测试聊天窗口">
-  <header class="chat-header">
-    <div class="agent"><span class="agent-avatar"><img src="/robot.svg" alt="机器人"></span><div><h1>AI 工作流测试</h1><p><span class="status-dot"></span>随时为你解答</p></div></div>
-    <button id="refresh-chat" class="refresh-button" type="button" title="刷新页面，清空当前聊天"><span aria-hidden="true">↻</span> 刷新</button>
-  </header>
-  <section id="messages" class="messages" aria-live="polite" aria-relevant="additions" aria-label="聊天消息">
-    <div class="time-divider">今天</div>
-    <div id="welcome" class="welcome">
-      <span class="welcome-icon"><img src="/robot.svg" alt="机器人"></span>
-      <h2>你好，很高兴为你服务</h2>
-      <p>设备使用遇到问题？<br>告诉我你的需求，我来帮你找答案。</p>
-      <div class="suggestions" aria-label="常见问题" hidden>
-        <span class="suggestions-label">你可以这样问</span>
-      </div>
-    </div>
-  </section>
-  <footer>
-    <form id="chat-form">
-      <label for="message" class="sr-only">输入你的问题</label>
-      <textarea id="message" rows="2" maxlength="10000" placeholder="请输入你想咨询的问题…"></textarea>
-      <div class="composer-bottom"><span id="input-hint">Enter 发送 · Shift + Enter 换行</span><button id="send" type="submit" disabled>发送 <span aria-hidden="true">↑</span></button></div>
-    </form>
-    <p class="footnote">AI 为你提供帮助，重要信息请核实</p>
-  </footer>
-</main>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AI 工作测试</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/css/chat.css?v=20261029-links-v3" />
+    <script src="/js/chat.js?v=20261029-links-v3" defer></script>
+  </head>
+  <body>
+    <main class="chat-window" aria-label="AI 工作测试聊天窗口">
+      <header class="chat-header">
+        <div class="agent">
+          <span class="agent-avatar"
+            ><img src="/robot.svg" alt="机器人"
+          /></span>
+          <div>
+            <h1>AI 工作流测试</h1>
+            <p><span class="status-dot"></span>随时为你解答</p>
+          </div>
+        </div>
+        <button
+          id="refresh-chat"
+          class="refresh-button"
+          type="button"
+          title="刷新页面，清空当前聊天"
+        >
+          <span aria-hidden="true">↻</span> 刷新
+        </button>
+      </header>
+      <section
+        id="messages"
+        class="messages"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label="聊天消息"
+      >
+        <div class="time-divider">今天</div>
+        <div id="welcome" class="welcome">
+          <span class="welcome-icon"
+            ><img src="/robot.svg" alt="机器人"
+          /></span>
+          <h2>你好，很高兴为你服务</h2>
+          <p>设备使用遇到问题？<br />告诉我你的需求，我来帮你找答案。</p>
+          <div class="suggestions" aria-label="常见问题" hidden>
+            <span class="suggestions-label">你可以这样问</span>
+          </div>
+        </div>
+      </section>
+      <footer>
+        <form id="chat-form">
+          <label for="message" class="sr-only">输入你的问题</label>
+          <textarea
+            id="message"
+            rows="2"
+            maxlength="10000"
+            placeholder="请输入你想咨询的问题…"
+          ></textarea>
+          <div class="composer-bottom">
+            <span id="input-hint">Enter 发送 · Shift + Enter 换行</span
+            ><button id="send" type="submit" disabled>
+              发送 <span aria-hidden="true">↑</span>
+            </button>
+          </div>
+        </form>
+        <p class="footnote">AI 为你提供帮助，重要信息请核实</p>
+      </footer>
+    </main>
+  </body>
 </html>
-
-
-
