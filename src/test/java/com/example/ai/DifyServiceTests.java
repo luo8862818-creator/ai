@@ -71,6 +71,55 @@ class DifyServiceTests {
     @Test void missingConfig() { config.setInputVariable(""); error("input-variable"); }
     @Test void unavailable() { server.stop(0); error("无法连接"); }
     String event(String json) { return "data: " + json + "\n\n"; }
+    @Test void plainMessageChunksAreNotLost() {
+        config.setMode("agent");
+        response = event("{\"event\":\"message\",\"answer\":\"你\",\"conversation_id\":\"c1\"}")
+            + event("{\"event\":\"message\",\"answer\":\"好\"}")
+            + event("{\"event\":\"message_end\"}");
+        assertEquals("你好", send().answer());
+    }
+    @Test void moderationReplacementReplacesRatherThanAppends() {
+        config.setMode("agent");
+        response = event("{\"event\":\"agent_message\",\"answer\":\"original\",\"conversation_id\":\"c1\"}")
+            + event("{\"event\":\"message_replace\",\"answer\":\"replaced\"}")
+            + event("{\"event\":\"message_end\"}");
+        assertEquals("replaced", send().answer());
+    }
+    @Test void ignoresOutputAfterMessageEnd() {
+        config.setMode("agent");
+        response = event("{\"event\":\"agent_message\",\"answer\":\"ok\",\"conversation_id\":\"c1\"}")
+            + event("{\"event\":\"message_end\"}")
+            + event("{\"event\":\"agent_message\",\"answer\":\"loop\"}");
+        assertEquals("ok", send().answer());
+    }
+    @Test void stopsExcessiveAnswerGrowth() {
+        config.setMode("agent"); config.setMaxAnswerChars(5);
+        response = event("{\"event\":\"agent_message\",\"answer\":\"abc\",\"conversation_id\":\"c1\"}")
+            + event("{\"event\":\"agent_message\",\"answer\":\"abc\"}");
+        error("回答长度超过限制");
+    }
+    @Test void stopsExcessiveEventsEvenWithoutAnswer() {
+        config.setMode("agent"); config.setMaxStreamEvents(2);
+        response = event("{\"event\":\"agent_thought\"}").repeat(3);
+        error("事件数量超过限制");
+    }
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void diagnosticsNeverLogPrivatePayload(org.springframework.boot.test.system.CapturedOutput output) {
+        config.setMode("agent");
+        response = event("{\"event\":\"agent_thought\",\"thought\":\"PRIVATE_REASONING\",\"tool_input\":\"PRIVATE_INPUT\",\"observation\":\"PRIVATE_RESULT\",\"task_id\":\"task-123\",\"message_id\":\"msg-456\"}")
+            + event("{\"event\":\"agent_message\",\"answer\":\"PRIVATE_ANSWER\",\"conversation_id\":\"c1\"}")
+            + event("{\"event\":\"message_end\"}");
+        new DifyService(config).send("PRIVATE_PROMPT", "test-user", null);
+        String logs = output.getAll();
+        assertTrue(logs.contains("first_event"));
+        assertTrue(logs.contains("first_answer"));
+        assertTrue(logs.contains("state=completed"));
+        assertTrue(logs.contains("task-123"));
+        assertTrue(logs.contains("msg-456"));
+        assertFalse(logs.contains("PRIVATE_"));
+        assertFalse(logs.contains("test-key"));
+    }
     @Test void agentStreamAndConversation() {
         config.setMode("agent");
         config.setInputVariable(""); config.setOutputVariable("");

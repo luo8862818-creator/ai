@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -57,7 +58,7 @@ public class DifyService {
             Thread.currentThread().interrupt();
             return List.of();
         } catch (IOException | RuntimeException e) {
-            log.warn("[DIFY] 无法读取开场推荐问题");
+            log.warn("[DIFY] 无法读取开场推荐问题 exceptionType={}", e.getClass().getSimpleName());
             return List.of();
         }
     }
@@ -83,12 +84,15 @@ public class DifyService {
             body.put("conversation_id", conversationId == null ? "" : conversationId);
         } else inputs.put(config.getInputVariable(), message);
         String url = config.getBaseUrl().replaceAll("/+$", "") + (chat ? "/chat-messages" : "/workflows/run");
-        log.info("[DIFY] 请求模式 {}，准备调用 Dify", config.getMode());
+        log.info("[DIFY] request mode={} path={} timeoutMs={} messageChars={} continuingConversation={}",
+            config.getMode(), chat ? "/chat-messages" : "/workflows/run", config.getReadTimeout().toMillis(),
+            message.length(), conversationId != null && !conversationId.isBlank());
         progress.accept(new Progress("status", agent ? "正在连接 Agent" : "正在执行工作流", "connect"));
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(url)).timeout(config.getReadTimeout())
                     .header("Authorization", "Bearer " + config.getApiKey())
                     .header("Content-Type", "application/json")
+                    .header("Accept", agent ? "text/event-stream" : "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();
             if (agent) return requestAgent(req, progress);
             HttpResponse<String> response = client.send(req, HttpResponse.BodyHandlers.ofString());
@@ -110,8 +114,10 @@ public class DifyService {
             if (output.isMissingNode() || output.isNull()) throw new DifyException("工作流输出变量不存在，请检查 output-variable 配置");
             return new Reply(text(output), null);
         } catch (HttpTimeoutException e) {
+            log.warn("[DIFY] timeout exceptionType={} limitMs={}", e.getClass().getSimpleName(), config.getReadTimeout().toMillis());
             throw new DifyException("Dify 请求超时，任务可能仍在运行，请先检查运行记录，避免重复执行任务");
         } catch (IOException e) {
+            log.warn("[DIFY] network_failure exceptionType={} causeType={}", e.getClass().getSimpleName(), e.getCause() == null ? "none" : e.getCause().getClass().getSimpleName());
             throw new DifyException("无法连接 Dify 服务或连接已中断，请检查网络、地址和端口");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -122,9 +128,13 @@ public class DifyService {
     }
 
     private Reply requestAgent(HttpRequest request, Consumer<Progress> progress) throws IOException, InterruptedException {
-        long started = System.nanoTime();
+        try (StreamStats stats = new StreamStats()) {
+        long started = stats.started;
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream input = response.body()) {
+            stats.headers = true;
+            log.info("[DIFY] stream_headers status={} elapsedMs={} contentType={}", response.statusCode(), stats.elapsedMs(),
+                safe(response.headers().firstValue("Content-Type").orElse("unspecified")));
             checkHttpStatus(response.statusCode());
             AtomicBoolean timedOut = new AtomicBoolean();
             // HttpRequest timeout alone does not cover reads after an InputStream body has been returned.
@@ -134,12 +144,15 @@ public class DifyService {
                 try { input.close(); } catch (IOException ignored) { /* reader reports failure */ }
             }, remaining, TimeUnit.NANOSECONDS);
             try {
-                AgentStream state = new AgentStream(progress);
+                AgentStream state = new AgentStream(progress, stats);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
                 StringBuilder data = new StringBuilder();
                 progress.accept(new Progress("status", "Agent 已连接，正在处理", "connected"));
                 String line;
                 while (!state.completed && (line = reader.readLine()) != null) {
+                    stats.lastReceived = System.nanoTime();
+                    if (line.length() + data.length() > 262144)
+                        throw new DifyException("Dify 单个流式事件过大，已停止接收，请检查 Agent 输出");
                     if (line.stripLeading().startsWith("{") && data.isEmpty()) {
                         JsonNode error = readJson(line);
                         int code = error.path("code").asInt(0);
@@ -157,11 +170,14 @@ public class DifyService {
                 }
                 if (timedOut.get()) throw new HttpTimeoutException("Agent response deadline exceeded");
                 if (!data.isEmpty() && !state.completed) state.accept(data.toString());
-                return state.reply();
+                Reply reply = state.reply();
+                stats.completed = true;
+                return reply;
             } catch (IOException e) {
                 if (timedOut.get()) throw new HttpTimeoutException("Agent response deadline exceeded");
                 throw e;
             } finally { deadline.cancel(false); }
+        }
         }
     }
 
@@ -172,14 +188,23 @@ public class DifyService {
         String conversation = "";
         boolean completed;
         boolean generating;
-        AgentStream(Consumer<Progress> progress) { this.progress = progress; }
+        final StreamStats stats;
+        boolean sawAgentMessage;
+        AgentStream(Consumer<Progress> progress, StreamStats stats) { this.progress = progress; this.stats = stats; }
         void accept(String data) {
-            if (data.isBlank() || "[DONE]".equals(data)) return;
+            if (completed || data.isBlank() || "[DONE]".equals(data)) return;
             JsonNode event;
             try { event = readJson(data); }
             catch (DifyException e) { throw new DifyException("Dify Agent 流式返回格式异常"); }
             String kind = event.path("event").asString("");
-            if ("error".equals(kind)) throw new DifyException("Dify Agent 执行失败，请检查应用模型、工具配置和 Dify 运行日志");
+            stats.event(event, kind);
+            if (stats.events > config.getMaxStreamEvents())
+                throw new DifyException("Dify 事件数量超过限制，已停止接收，请检查 Agent 是否循环执行");
+            if ("error".equals(kind)) {
+                log.warn("[DIFY] upstream_error code={} status={} taskId={} messageId={}",
+                    safe(event.path("code").asString("")), event.path("status").asInt(0), stats.taskId, stats.messageId);
+                throw new DifyException("Dify Agent 执行失败，请检查应用模型、工具配置和 Dify 运行日志");
+            }
             String id = event.path("conversation_id").asString("");
             if (!id.isBlank()) conversation = id;
             switch (kind) {
@@ -189,7 +214,10 @@ public class DifyService {
                     String step = event.path("id").asString(event.path("position").asString(""));
                     if (!tool.isBlank()) {
                         String key = step + ":" + tool;
-                        if (reportedTools.add(key)) progress.accept(new Progress("tool", tool, key));
+                        if (reportedTools.add(key)) {
+                            log.info("[DIFY] tool stepId={} tool={} elapsedMs={}", safe(step), safe(tool), stats.elapsedMs());
+                            progress.accept(new Progress("tool", tool, key));
+                        }
                     }
                 }
                 case "agent_message", "message", "message_replace" -> {
@@ -198,8 +226,14 @@ public class DifyService {
                         generating = true;
                         progress.accept(new Progress("status", "正在生成回复", "answer"));
                     }
-                    if (!"agent_message".equals(kind)) answer.setLength(0);
+                    // Agent's closing message is a complete snapshot. Plain message-only streams use deltas.
+                    boolean replace = "message_replace".equals(kind) || ("message".equals(kind) && sawAgentMessage);
+                    if ((replace ? 0L : answer.length()) + chunk.length() > config.getMaxAnswerChars())
+                        throw new DifyException("Dify 回答长度超过限制，已停止接收，请检查 Agent 是否重复输出");
+                    if (replace) answer.setLength(0);
+                    if ("agent_message".equals(kind)) sawAgentMessage = true;
                     answer.append(chunk);
+                    stats.answer(answer.length());
                     progress.accept(new Progress("answer", answer.toString(), "answer"));
                 }
                 case "message_end" -> completed = true;
@@ -211,6 +245,59 @@ public class DifyService {
             if (answer.toString().isBlank()) throw new DifyException("Dify Agent 未返回文本答案，请检查应用配置");
             if (conversation.isBlank()) throw new DifyException("Dify Agent 返回格式异常：缺少 conversation_id");
             return new Reply(answer.toString(), conversation);
+        }
+    }
+
+    // Explicit allowlist: never log prompts, answers, thought, tool input/output, or Authorization.
+    private static String safe(String value) {
+        if (value == null) return "";
+        String cleaned = value.replaceAll("[^a-zA-Z0-9_.:/,;= +-]", "_");
+        return cleaned.substring(0, Math.min(160, cleaned.length()));
+    }
+
+    private class StreamStats implements AutoCloseable {
+        final long started = System.nanoTime();
+        final String requestId = Optional.ofNullable(MDC.get("requestId")).orElse("direct-call");
+        final ConcurrentMap<String, java.util.concurrent.atomic.LongAdder> counts = new ConcurrentHashMap<>();
+        volatile long lastReceived = started;
+        volatile long events;
+        volatile int answerChars;
+        volatile boolean headers;
+        volatile boolean completed;
+        volatile String taskId = "", messageId = "", conversationId = "";
+        boolean firstAnswer;
+        final ScheduledFuture<?> heartbeat = DEADLINES.scheduleAtFixedRate(() -> summary("waiting"), 15, 15, TimeUnit.SECONDS);
+        long elapsedMs() { return (System.nanoTime() - started) / 1_000_000; }
+        void event(JsonNode event, String kind) {
+            events++;
+            // Bound counter keys even if the upstream emits arbitrary event names.
+            String key = switch (kind) {
+                case "agent_message", "message", "message_replace", "agent_thought", "message_end", "error", "ping",
+                     "workflow_started", "workflow_finished", "node_started", "node_finished" -> kind;
+                default -> "other";
+            };
+            counts.computeIfAbsent(key, ignored -> new java.util.concurrent.atomic.LongAdder()).increment();
+            if (event.has("task_id")) taskId = safe(event.path("task_id").asString(""));
+            if (event.has("message_id")) messageId = safe(event.path("message_id").asString(""));
+            if (event.has("conversation_id")) conversationId = safe(event.path("conversation_id").asString(""));
+            if (events == 1) log.info("[DIFY] first_event type={} elapsedMs={} taskId={} messageId={}", safe(kind), elapsedMs(), taskId, messageId);
+            log.debug("[DIFY] event type={} index={} answerChunkChars={} elapsedMs={}", safe(kind), events, event.path("answer").asString("").length(), elapsedMs());
+        }
+        void answer(int chars) {
+            answerChars = chars;
+            if (!firstAnswer && chars > 0) {
+                firstAnswer = true;
+                log.info("[DIFY] first_answer elapsedMs={} taskId={}", elapsedMs(), taskId);
+            }
+        }
+        void summary(String state) {
+            log.info("[DIFY] stream_summary requestId={} state={} headers={} elapsedMs={} idleMs={} events={} answerChars={} eventCounts={} taskId={} messageId={} conversationId={}",
+                requestId, state, headers, elapsedMs(), (System.nanoTime() - lastReceived) / 1_000_000,
+                events, answerChars, counts, taskId, messageId, conversationId);
+        }
+        @Override public void close() {
+            heartbeat.cancel(false);
+            summary(completed ? "completed" : "incomplete");
         }
     }
 

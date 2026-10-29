@@ -1,5 +1,31 @@
 # Dify 工作助手
 
+## 服务器 HTTP 访问与排错
+
+浏览器通过内网 IP 的 HTTP 地址访问时，`crypto.randomUUID()` 可能不存在。前端已改为优先使用原生方法，再使用 `getRandomValues` 生成 UUID；缺少这些能力时也可生成本地会话标识。此标识不用于身份认证。部署新 JAR 后重启服务，并强制刷新浏览器；开发者工具中脚本版本应为 `20261029-http-stream-v5`。
+
+流式回复收到 `complete` 或 `error` 后立即停止读取，后续事件不再改变已结束的回答。Java 保留 Agent 最终完整答案替换的语义，同时修复仅含普通 `message` 分段时丢失前文的问题。异常输出限制为 100000 个字符或 20000 个事件，可通过 `dify.max-answer-chars`、`dify.max-stream-events` 调整。达到限制会停止接收并明确报错；这不保证远端 Agent 已停止执行，仍需查看 Dify 运行记录。输出重复是否由 Agent 本身循环引起，需要结合日志判断。
+
+日志写入启动目录下的 `logs/ai.log`：每个文件最多 10MB，保留 7 天，总上限 100MB。应用请求通过 `requestId` 串联；浏览器响应头 `X-Request-Id` 可用于查找同一次调用。
+
+- `stream_headers`：收到 Dify 响应头的时间及响应类型。
+- `first_event`、`first_answer`：首个事件和首段文字的耗时。
+- `tool`：工具标识及耗时，不记录输入、输出或思考内容。
+- `stream_summary`：等待时每 15 秒记录一次，结束时记录一次；包含总耗时、距最近收到数据的时长、事件分类计数、回答字符数以及 Dify 任务／消息编号。
+- `timeout`、`network_failure`、`upstream_error`：区分超时、网络异常和上游错误。
+
+需要逐事件排查时，可在本地部署配置中添加：
+
+```yaml
+logging:
+  level:
+    com.example.ai.service.DifyService: DEBUG
+```
+
+DEBUG 也只打印事件类型、序号、字符数和耗时，不打印 API Key、问题正文、回答正文或工具参数。不要仅凭 HTTP 200 判断流式任务成功，应查看 `state=completed` 或 `incomplete`。
+
+验证命令：`node --test src/test/js/*.test.cjs`、`mvn package`。本次 17 项前端检查和 39 项 Java 测试通过，并用浏览器 MCP 通过实际内网 IP 的 HTTP 页面验证：`isSecureContext=false`、原生 `randomUUID` 不存在时，仍可初始化并完成模拟聊天。浏览器检查未调用真实 Agent。
+
 ## 运行
 
 要求 Java 17、Maven。项目沿用 Spring Boot 4.0.9。

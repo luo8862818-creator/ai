@@ -37,3 +37,4 @@ app-run.log
 build-verification.log
 .playwright-mcp/
 app-final.log
+logs/

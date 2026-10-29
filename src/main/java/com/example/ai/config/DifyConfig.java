@@ -18,4 +18,6 @@ public class DifyConfig {
     private Duration connectTimeout = Duration.ofSeconds(10);
     private Duration readTimeout = Duration.ofSeconds(60);
     private Map<String, Object> inputs = new LinkedHashMap<>();
+    private int maxAnswerChars = 100000;
+    private int maxStreamEvents = 20000;
 }

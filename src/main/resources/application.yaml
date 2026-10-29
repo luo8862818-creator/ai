@@ -2,10 +2,10 @@ spring:
   application:
     name: ai
   config:
-    import: optional:file:./application-local.yaml
+    import: optional:classpath:application-local.yaml
 
 server:
-  port: 8080
+  port: 18084
 
 dify:
   base-url: ${DIFY_BASE_URL:http://192.168.3.5:18082/v1}
@@ -21,6 +21,20 @@ dify:
   connect-timeout: 10s
   read-timeout: 180s
   inputs: {}
+  # Stop abnormally large streams instead of allowing indefinite browser growth.
+  max-answer-chars: 100000
+  max-stream-events: 20000
+
+logging:
+  file:
+    name: logs/ai.log
+  pattern:
+    level: "%5p [requestId:%X{requestId:-none}]"
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 7
+      total-size-cap: 100MB
 
 
 

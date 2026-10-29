@@ -6,7 +6,23 @@ const refreshButton = document.querySelector("#refresh-chat");
 const messages = document.querySelector("#messages");
 const welcome = document.querySelector("#welcome");
 
-const sessionId = crypto.randomUUID();
+function createSessionId() {
+  const browserCrypto = globalThis.crypto;
+  if (typeof browserCrypto?.randomUUID === "function") {
+    try { return browserCrypto.randomUUID(); } catch { /* Try the HTTP-compatible API. */ }
+  }
+  if (typeof browserCrypto?.getRandomValues === "function") {
+    try {
+      const bytes = browserCrypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    } catch { /* A local conversation label is not an authentication token. */ }
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+const sessionId = createSessionId();
 let busy = false;
 function refresh() {
   sendButton.disabled = busy || !input.value.trim();
@@ -292,6 +308,7 @@ function createReply() {
   };
   return {
     event(type, data) {
+      if (finished) return;
       backendElapsed = Math.max(backendElapsed, data.elapsedMs || 0);
       if (type === "status") step(data.text, data.stepId, data.elapsedMs);
       if (type === "tool")
@@ -333,10 +350,17 @@ async function readEvents(response, onEvent) {
   let pending = "";
   let eventType = "message";
   let data = [];
+  let ended = false;
   const line = (value) => {
     if (value.endsWith("\r")) value = value.slice(0, -1);
     if (value === "") {
-      if (data.length) onEvent(eventType, JSON.parse(data.join("\n")));
+      if (data.length) {
+        let payload;
+        try { payload = JSON.parse(data.join("\n")); }
+        catch { throw new Error("服务器返回的回复格式异常，请根据请求编号检查日志。"); }
+        onEvent(eventType, payload);
+        ended = eventType === "complete" || eventType === "error";
+      }
       eventType = "message";
       data = [];
     } else if (value.startsWith("event:")) eventType = value.slice(6).trim();
@@ -344,23 +368,25 @@ async function readEvents(response, onEvent) {
       data.push(value.slice(5).replace(/^ /, ""));
   };
   try {
-    while (true) {
+    while (!ended) {
       const chunk = await reader.read();
       pending += chunk.done
         ? decoder.decode()
         : decoder.decode(chunk.value, { stream: true });
       let newline;
-      while ((newline = pending.indexOf("\n")) >= 0) {
+      while (!ended && (newline = pending.indexOf("\n")) >= 0) {
         line(pending.slice(0, newline));
         pending = pending.slice(newline + 1);
       }
-      if (chunk.done) {
+      if (chunk.done && !ended) {
         if (pending) line(pending);
         line("");
         break;
       }
     }
   } finally {
+    // A terminal event ends the reply even if a proxy keeps the connection open.
+    try { await reader.cancel(); } catch { /* The connection may already be closed. */ }
     reader.releaseLock();
   }
 }

@@ -91,19 +91,28 @@ public class ChatController {
                 });
             if (reply.conversationId() != null) session.setAttribute("conversationId", reply.conversationId());
             emit(response, "complete", Map.of("answer", reply.answer(), "sessionId", id, "elapsedMs", elapsed(started)));
-            log.info("[CHAT] 流式回复完成 sessionId={} elapsedMs={}", id, elapsed(started));
+            log.info("[CHAT] 流式回复完成 sessionId={} elapsedMs={} answerChars={}", id, elapsed(started), reply.answer().length());
         } catch (DifyException e) {
-            log.warn("[CHAT] 流式请求失败：{}", e.getMessage());
-            emit(response, "error", Map.of("message", e.getMessage(), "elapsedMs", elapsed(started)));
+            log.warn("[CHAT] 流式请求失败 elapsedMs={} reason={}", elapsed(started), e.getMessage());
+            emitError(response, e.getMessage(), started);
         } catch (UncheckedIOException e) {
-            log.info("[CHAT] 浏览器已断开流式连接 sessionId={}", id);
+            log.info("[CHAT] 浏览器已断开流式连接 sessionId={} elapsedMs={} causeType={}", id, elapsed(started), e.getCause().getClass().getSimpleName());
+        } catch (IOException e) {
+            log.info("[CHAT] 写入浏览器失败 elapsedMs={} exceptionType={}", elapsed(started), e.getClass().getSimpleName());
         } catch (RuntimeException e) {
-            log.error("[CHAT] 流式处理发生异常，类型={}", e.getClass().getSimpleName());
-            emit(response, "error", Map.of("message", "服务处理异常，请检查后端日志", "elapsedMs", elapsed(started)));
+            log.error("[CHAT] 流式处理发生异常 elapsedMs={} exceptionType={} location={}", elapsed(started), e.getClass().getName(),
+                e.getStackTrace().length == 0 ? "unknown" : e.getStackTrace()[0]);
+            emitError(response, "服务处理异常，请检查后端日志", started);
         } finally { session.setAttribute("busy", false); }
         return null;
     }
     private long elapsed(long started) { return (System.nanoTime() - started) / 1_000_000; }
+    private void emitError(HttpServletResponse response, String message, long started) {
+        try { emit(response, "error", Map.of("message", message, "elapsedMs", elapsed(started))); }
+        catch (IOException e) {
+            log.info("[CHAT] 错误事件未能送达浏览器 elapsedMs={} exceptionType={}", elapsed(started), e.getClass().getSimpleName());
+        }
+    }
     private final JsonMapper streamJson = JsonMapper.builder().build();
     private void emit(HttpServletResponse response, String event, Object data) throws IOException {
         response.getWriter().write("event: " + event + "\ndata: " + streamJson.writeValueAsString(data) + "\n\n");
